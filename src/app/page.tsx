@@ -1,21 +1,19 @@
-// Esempio base React + MediaPipe FaceMesh per annotazioni sul volto con selezione webcam
-
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import type { NormalizedLandmark } from '@mediapipe/face_mesh';
 import CameraUtils from '@mediapipe/camera_utils';
 const Camera = CameraUtils.Camera;
 
 export default function FaceAnnotator() {
-  const videoRef = useRef(null);
-  const faceCanvasRef = useRef(null);
-  const annotationCanvasRef = useRef(null);
-  const [annotations, setAnnotations] = useState([]);
-  const [landmarks, setLandmarks] = useState(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const faceCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const annotationCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [annotations, setAnnotations] = useState<{ landmarkIndex: number; note: string }[]>([]);
+  const [landmarks, setLandmarks] = useState<NormalizedLandmark[] | null>(null);
   const [isClient, setIsClient] = useState(false);
-  const [devices, setDevices] = useState([]);
-  const [selectedDeviceId, setSelectedDeviceId] = useState(null);
-  const cameraRef = useRef(null);
+  const cameraRef = useRef<InstanceType<typeof Camera> | null>(null);
+
 
   useEffect(() => {
     setIsClient(true);
@@ -23,16 +21,6 @@ export default function FaceAnnotator() {
 
   useEffect(() => {
     if (!isClient) return;
-
-    navigator.mediaDevices.enumerateDevices().then((allDevices) => {
-      const videoDevices = allDevices.filter((d) => d.kind === 'videoinput');
-      setDevices(videoDevices);
-      setSelectedDeviceId((prev) => prev || videoDevices[0]?.deviceId || null);
-    });
-  }, [isClient]);
-
-  useEffect(() => {
-    if (!isClient || !selectedDeviceId) return;
 
     const initFaceMesh = async () => {
       const { FaceMesh } = await import('@mediapipe/face_mesh');
@@ -53,14 +41,12 @@ export default function FaceAnnotator() {
         if (!canvas) return;
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
-        ctx.save();
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
 
         if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
           const faceLandmarks = results.multiFaceLandmarks[0];
           setLandmarks(faceLandmarks);
-
           for (const point of faceLandmarks) {
             const x = point.x * canvas.width;
             const y = point.y * canvas.height;
@@ -70,24 +56,18 @@ export default function FaceAnnotator() {
             ctx.fill();
           }
         }
-        ctx.restore();
       });
 
-      if (cameraRef.current) {
-        cameraRef.current.stop();
-      }
+      if (cameraRef.current) cameraRef.current.stop();
 
       if (videoRef.current) {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { deviceId: { exact: selectedDeviceId } },
-        });
-
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
 
         const newCamera = new Camera(videoRef.current, {
           onFrame: async () => {
-            await faceMesh.send({ image: videoRef.current });
+            await faceMesh.send({ image: videoRef.current! });
           },
           width: 640,
           height: 480,
@@ -99,11 +79,11 @@ export default function FaceAnnotator() {
     };
 
     initFaceMesh();
-  }, [isClient, selectedDeviceId]);
+  }, [isClient]);
 
-  const handleCanvasClick = (e) => {
+  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!landmarks) return;
-    const rect = annotationCanvasRef.current.getBoundingClientRect();
+    const rect = annotationCanvasRef.current!.getBoundingClientRect();
     const xClick = e.clientX - rect.left;
     const yClick = e.clientY - rect.top;
 
@@ -129,7 +109,7 @@ export default function FaceAnnotator() {
     if (!isClient || !landmarks) return;
     const canvas = annotationCanvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas?.getContext('2d');
     if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     annotations.forEach(({ landmarkIndex, note }) => {
@@ -149,26 +129,9 @@ export default function FaceAnnotator() {
 
   return (
     <div className="flex flex-col items-center">
-      <select
-        className="mb-2 border border-gray-300 p-1"
-        onChange={(e) => setSelectedDeviceId(e.target.value)}
-        value={selectedDeviceId || ''}
-      >
-        {devices.map((device) => (
-          <option key={device.deviceId} value={device.deviceId}>
-            {device.label || `Camera ${device.deviceId}`}
-          </option>
-        ))}
-      </select>
-
       <div className="relative w-[640px] h-[480px]">
         <video ref={videoRef} className="hidden" width="640" height="480" autoPlay playsInline muted></video>
-        <canvas
-          ref={faceCanvasRef}
-          width="640"
-          height="480"
-          className="absolute top-0 left-0 z-0"
-        />
+        <canvas ref={faceCanvasRef} width="640" height="480" className="absolute top-0 left-0 z-0" />
         <canvas
           ref={annotationCanvasRef}
           width="640"
@@ -177,7 +140,7 @@ export default function FaceAnnotator() {
           onClick={handleCanvasClick}
         />
       </div>
-      <p className="mt-4 text-center">Clicca su un punto del volto per aggiungere un'annotazione.</p>
+      <p className="mt-4 text-center">Clicca su un punto del volto per aggiungere un&apos;annotazione.</p>
     </div>
   );
 }
