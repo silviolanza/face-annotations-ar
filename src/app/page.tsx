@@ -1,103 +1,183 @@
-import Image from "next/image";
+// Esempio base React + MediaPipe FaceMesh per annotazioni sul volto con selezione webcam
 
-export default function Home() {
+'use client';
+
+import { useEffect, useRef, useState } from 'react';
+import CameraUtils from '@mediapipe/camera_utils';
+const Camera = CameraUtils.Camera;
+
+export default function FaceAnnotator() {
+  const videoRef = useRef(null);
+  const faceCanvasRef = useRef(null);
+  const annotationCanvasRef = useRef(null);
+  const [annotations, setAnnotations] = useState([]);
+  const [landmarks, setLandmarks] = useState(null);
+  const [isClient, setIsClient] = useState(false);
+  const [devices, setDevices] = useState([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState(null);
+  const cameraRef = useRef(null);
+
+  useEffect(() => {
+    setIsClient(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isClient) return;
+
+    navigator.mediaDevices.enumerateDevices().then((allDevices) => {
+      const videoDevices = allDevices.filter((d) => d.kind === 'videoinput');
+      setDevices(videoDevices);
+      setSelectedDeviceId((prev) => prev || videoDevices[0]?.deviceId || null);
+    });
+  }, [isClient]);
+
+  useEffect(() => {
+    if (!isClient || !selectedDeviceId) return;
+
+    const initFaceMesh = async () => {
+      const { FaceMesh } = await import('@mediapipe/face_mesh');
+
+      const faceMesh = new FaceMesh({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`,
+      });
+
+      faceMesh.setOptions({
+        maxNumFaces: 1,
+        refineLandmarks: true,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5,
+      });
+
+      faceMesh.onResults((results) => {
+        const canvas = faceCanvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        ctx.save();
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+
+        if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+          const faceLandmarks = results.multiFaceLandmarks[0];
+          setLandmarks(faceLandmarks);
+
+          for (const point of faceLandmarks) {
+            const x = point.x * canvas.width;
+            const y = point.y * canvas.height;
+            ctx.beginPath();
+            ctx.arc(x, y, 1, 0, 2 * Math.PI);
+            ctx.fillStyle = '#00FF00';
+            ctx.fill();
+          }
+        }
+        ctx.restore();
+      });
+
+      if (cameraRef.current) {
+        cameraRef.current.stop();
+      }
+
+      if (videoRef.current) {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: { exact: selectedDeviceId } },
+        });
+
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+
+        const newCamera = new Camera(videoRef.current, {
+          onFrame: async () => {
+            await faceMesh.send({ image: videoRef.current });
+          },
+          width: 640,
+          height: 480,
+        });
+
+        cameraRef.current = newCamera;
+        newCamera.start();
+      }
+    };
+
+    initFaceMesh();
+  }, [isClient, selectedDeviceId]);
+
+  const handleCanvasClick = (e) => {
+    if (!landmarks) return;
+    const rect = annotationCanvasRef.current.getBoundingClientRect();
+    const xClick = e.clientX - rect.left;
+    const yClick = e.clientY - rect.top;
+
+    let closestIndex = 0;
+    let minDist = Infinity;
+
+    landmarks.forEach((point, index) => {
+      const x = point.x * 640;
+      const y = point.y * 480;
+      const dist = Math.sqrt((x - xClick) ** 2 + (y - yClick) ** 2);
+      if (dist < minDist) {
+        minDist = dist;
+        closestIndex = index;
+      }
+    });
+
+    const note = prompt('Inserisci nota:');
+    if (!note) return;
+    setAnnotations([...annotations, { landmarkIndex: closestIndex, note }]);
+  };
+
+  useEffect(() => {
+    if (!isClient || !landmarks) return;
+    const canvas = annotationCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    annotations.forEach(({ landmarkIndex, note }) => {
+      const point = landmarks[landmarkIndex];
+      if (!point) return;
+      const x = point.x * 640;
+      const y = point.y * 480;
+      ctx.beginPath();
+      ctx.arc(x, y, 5, 0, 2 * Math.PI);
+      ctx.fillStyle = 'red';
+      ctx.fill();
+      ctx.fillText(note, x + 8, y);
+    });
+  }, [annotations, landmarks, isClient]);
+
+  if (!isClient) return null;
+
   return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm/6 text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-[family-name:var(--font-geist-mono)] font-semibold">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+    <div className="flex flex-col items-center">
+      <select
+        className="mb-2 border border-gray-300 p-1"
+        onChange={(e) => setSelectedDeviceId(e.target.value)}
+        value={selectedDeviceId || ''}
+      >
+        {devices.map((device) => (
+          <option key={device.deviceId} value={device.deviceId}>
+            {device.label || `Camera ${device.deviceId}`}
+          </option>
+        ))}
+      </select>
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+      <div className="relative w-[640px] h-[480px]">
+        <video ref={videoRef} className="hidden" width="640" height="480" autoPlay playsInline muted></video>
+        <canvas
+          ref={faceCanvasRef}
+          width="640"
+          height="480"
+          className="absolute top-0 left-0 z-0"
+        />
+        <canvas
+          ref={annotationCanvasRef}
+          width="640"
+          height="480"
+          className="absolute top-0 left-0 z-10"
+          onClick={handleCanvasClick}
+        />
+      </div>
+      <p className="mt-4 text-center">Clicca su un punto del volto per aggiungere un'annotazione.</p>
     </div>
   );
 }
